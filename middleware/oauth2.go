@@ -1,53 +1,51 @@
 package middleware
 
 import (
+	"net/http"
+
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	ginoauth2 "github.com/zalando/gin-oauth2"
 )
 
-// ScopesAuth is an AccessCheckFunction that gives access if the token includes
-// all of the specified scopes.
-func ScopesAuth(scopes ...string) ginoauth2.AccessCheckFunction {
-	// convert scopes slice to set.
-	authScopes := make(map[string]struct{})
-	for _, scope := range scopes {
-		authScopes[scope] = struct{}{}
-	}
+const UserKey = "user"
 
-	return func(tc *ginoauth2.TokenContainer, ctx *gin.Context) bool {
-		for scope := range authScopes {
-			value, ok := tc.Scopes[scope]
-			if !ok {
-				return false
-			}
-			ctx.Set(scope, value)
+type Authenticator struct {
+	Scopes        []string
+	OAuth2Handler func(ctx *gin.Context)
+	Key           string
+	ApiKeyValid   func(string) bool
+}
+
+func (a *Authenticator) Auth(ctx *gin.Context) {
+	if a.ApiKeyValid != nil {
+		keyHeader := ctx.GetHeader(a.Key)
+
+		if a.ApiKeyValid(keyHeader) {
+			ctx.Next()
+			return
 		}
-		// set uid and realm
-		// ctx.Set("uid")
-		return true
+
+		if keyHeader != "" && !a.ApiKeyValid(keyHeader) {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "wrong api key"})
+			return
+		}
 	}
+
+	if a.OAuth2Handler != nil {
+		a.OAuth2Handler(ctx)
+		return
+	}
+	ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
 }
 
-// User defines a user with UID and Realm.
-type User struct {
-	UID   string
-	Realm string
-}
+func UserInfoHandler(ctx *gin.Context) {
+	session := sessions.Default(ctx)
 
-// GetUser gets user (uid and realm) from a gin context.
-func GetUser(ctx *gin.Context) User {
-	user := User{}
-	uid, ok := ctx.Get("uid")
-	if !ok {
-		return user
+	user := session.Get(UserKey)
+	if user == nil {
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "no user"})
+		return
 	}
-	user.UID = uid.(string)
 
-	realm, ok := ctx.Get("realm")
-	if !ok {
-		return user
-	}
-	user.Realm = realm.(string)
-
-	return user
+	ctx.JSON(http.StatusOK, gin.H{"user": user})
 }

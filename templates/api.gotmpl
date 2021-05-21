@@ -2,6 +2,7 @@ package {{ .APIPackage }}
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,9 +31,26 @@ type Routes struct {
 	*gin.Engine
 	{{range .Operations}}{{ pascalize .Name }} struct {
 		*gin.RouterGroup
-		{{ if .Authorized }}Auth gin.HandlerFunc {{end}}
+		// {{ if .Authorized }}Auth []func(ctx *gin.Context) error {{end}}
+		{{ if .Authorized }}Auth *middleware.Authenticator {{end}}
 	}
 {{end}}
+}
+
+func AuthHandler(authFuncs []func(ctx *gin.Context) error) func(ctx *gin.Context) {
+	return func(ctx *gin.Context) {
+		var err error
+		for _, authFunc := range authFuncs {
+			err = authFunc(ctx)
+			log.Println(err)
+			if err == nil {
+				log.Println("auth ok")
+				ctx.Next()
+				return
+			}
+		}
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": fmt.Errorf("authentication failed: %w", err)})
+	}
 }
 
 // configureWellKnown enables and configures /.well-known endpoints.
@@ -90,35 +108,32 @@ func ginizePath(path string) string {
 }
 
 // initializeRoutes initializes the route structure for the Server service.
-func initializeRoutes(enableAuth bool, tokenURL string, tracer opentracing.Tracer) *Routes {
+func initializeRoutes(config *Config) *Routes {
+	store := cookie.NewStore([]byte(config.Secret))
+
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(sessions.Sessions("session", store))
 	routes := &Routes{Engine: engine}
 
 	{{range .Operations}}routes.{{ pascalize .Name }}.RouterGroup = routes.Group("{{ .BasePath }}")
 	routes.{{ pascalize .Name }}.RouterGroup.Use(middleware.LogrusLogger())
-	if tracer != nil {
-		routes.{{ pascalize .Name }}.RouterGroup.Use(tracing.InitSpan(tracer, "{{ snakize .Name }}"))
+	if config.Tracer != nil {
+		routes.{{ pascalize .Name }}.RouterGroup.Use(tracing.InitSpan(config.Tracer, "{{ snakize .Name }}"))
 	}
 	{{ if and (ne .Method "GET") .HasBodyParams }}routes.{{ pascalize .Name }}.RouterGroup.Use(middleware.ContentTypes({{range $index, $typ := .ConsumesMediaTypes}}{{if $index}},{{end}}"{{$typ}}"{{end}}))
-{{ end }}	{{ if .Authorized }}if enableAuth {
-		{{ $routeName := (pascalize .Name) }}
+{{ end }}	{{ if .Authorized }}if !config.AuthDisabled { {{ $routeName := (pascalize .Name) }}
+		routes.{{ $routeName }}.Auth = &middleware.Authenticator{}
 		{{ $securityDefinitions := .SecurityDefinitions }}
 		{{ range .Security }}{{ range . }}{{ $name := .Name }}{{ range $i, $def := $securityDefinitions }}
-		{{ if eq $def.ID $name }}
-		{{ if eq $def.Type "oauth2" }}
-		routeTokenURL := tokenURL
-		if routeTokenURL == "" {
-			routeTokenURL = {{printf "%q" $def.TokenURL}}
-		}
-		routes.{{ $routeName }}.Auth = ginoauth2.Auth(
-			middleware.ScopesAuth({{range $index, $scope := .Scopes}}{{if $index}},{{end}}"{{$scope}}"{{end}}),
-			oauth2.Endpoint{
-				TokenURL: routeTokenURL,
-			},
-		)
-		{{ end }}
-		{{ end }}{{ end }}{{ end }}{{ end }}
+		{{ if eq $def.ID $name }}{{ if eq $def.Type "oauth2" }}
+		routes.{{ $routeName }}.Auth.OAuth2Handler = config.OAuth2Handler
+		routes.{{ $routeName }}.Auth.Scopes = []string{ {{range $index, $scope := .Scopes}}{{if $index}},{{end}}"{{$scope}}"{{end}} }
+		{{ end }}{{ end }}
+		{{ if eq $def.ID $name }}{{ if eq $def.Type "apikey" }}
+		routes.{{ $routeName }}.Auth.ApiKeyValid = config.ApiKeyValid
+		routes.{{ $routeName }}.Auth.Key = "{{.Name}}"
+		{{ end }}{{ end }}{{ end }}{{ end }}{{ end }}
 	}
 {{end}}
 {{end}}
@@ -145,11 +160,7 @@ func NewServer(svc Service, config *Config) *Server {
 	}
 
 	server := &Server{
-		Routes: initializeRoutes(
-			!config.AuthDisabled,
-			config.TokenURL,
-			config.Tracer,
-		),
+		Routes: initializeRoutes(config),
 		service: svc,
 		config: config,
 		Title: "{{ .Info.Title }}",
@@ -198,7 +209,8 @@ func (s *Server) ConfigureRoutes() {
 // Configuring of routes includes setting up Auth if it is enabled.
 func (s *Server) configureRoutes() {
 	if !s.authDisabled {
-	{{range .Operations}}{{ if .Authorized }}s.Routes.{{ pascalize .Name }}.Use(s.Routes.{{ pascalize .Name }}.Auth)
+	{{range .Operations}}{{ if .Authorized }}
+	s.Routes.{{ pascalize .Name }}.Use(s.Routes.{{ pascalize .Name }}.Auth.Auth)
 	{{end}}{{end}}}
 
 	// setup all service routes after the authenticate middleware has been

@@ -147,6 +147,73 @@ server. For instance you can tell the server to serve HTTP only with the
 
 For a full example see the [example folder](example).
 
+### Custom OAuth2
+
+`gin-swagger` parses command line arguments for oauth and provides an extensible auth interface for single endpoints. 
+This is not fully generated yet and requires some additions for the server. Google OAuth2 would like in the following 
+example.
+
+```go
+package main
+
+import ...
+
+func main() {
+    apiConfig := &restapi.Config{}
+    apiConfig = apiConfig.WithDefaultFlags()
+    err := apiConfig.Parse()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    secret := []byte("secret")
+    google.Setup(apiConfig.OAuth2Config.RedirectURL, "./test-clientid.google.json", apiConfig.OAuth2Config.Scopes, secret)
+
+    svc := &mySvc{health: true}
+    api := restapi.NewServer(svc, &apiConfig)
+
+    api.Routes.GET("/login", google.LoginHandler) // This endpoint is not defined in swagger
+    api.Routes.GetReport.Auth = append(server.Routes.GetReport.Auth, google.Auth())
+    
+    err = api.RunWithSigHandler()
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### API Key Auth
+
+API Key authentication defined in swagger requires the ApiKeyValid function to be provided to the config like in the 
+following example. 
+
+```go
+package main
+
+import ...
+
+func main() {
+    apiConfig := &restapi.Config{}
+    apiConfig = apiConfig.WithDefaultFlags()
+    err := apiConfig.Parse()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    apiConfig.ApiKeyValid = func(s string) bool {
+        return s == "123456"
+    }
+    
+    svc := &mySvc{health: true}
+    api := restapi.NewServer(svc, &apiConfig)
+    err = api.RunWithSigHandler()
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+
 ## Features
 * [ ] Validate + bind input to gin ctx.
   * [x] bind body input.
@@ -156,7 +223,7 @@ For a full example see the [example folder](example).
   * [ ] consume more than `application/json`
 * [ ] Security.
   * [ ] basic
-  * [ ] apiKey
+  * [x] apiKey
   * [ ] OAuth2
     * [x] `password` (Bearer token)
     * [ ] `accessCode`
