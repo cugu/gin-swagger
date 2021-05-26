@@ -16,6 +16,7 @@ require (
 	github.com/go-swagger/go-swagger v0.27.0
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/sirupsen/logrus v1.8.1
+	github.com/tidwall/pretty v1.1.0 // indirect
 	github.com/zalando/gin-oauth2 v1.5.3
 	golang.org/x/oauth2 v0.0.0-20210323180902-22b0adad7558
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6

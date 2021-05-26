@@ -9,33 +9,12 @@ import (
 
 const UserKey = "user"
 
-type Authenticator struct {
-	Scopes        []string
-	OAuth2Handler func(ctx *gin.Context)
-	Key           string
-	ApiKeyValid   func(string) bool
-}
+type Authenticator interface {
+	Auth() []gin.HandlerFunc
 
-func (a *Authenticator) Auth(ctx *gin.Context) {
-	if a.ApiKeyValid != nil {
-		keyHeader := ctx.GetHeader(a.Key)
-
-		if a.ApiKeyValid(keyHeader) {
-			ctx.Next()
-			return
-		}
-
-		if keyHeader != "" && !a.ApiKeyValid(keyHeader) {
-			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "wrong api key"})
-			return
-		}
-	}
-
-	if a.OAuth2Handler != nil {
-		a.OAuth2Handler(ctx)
-		return
-	}
-	ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+	SetOAuth2(flow, authURL, tokenURL string, scopes []string)
+	SetAPIKey(name, in string)
+	Use(handlerFunc gin.HandlerFunc)
 }
 
 func UserInfoHandler(ctx *gin.Context) {
